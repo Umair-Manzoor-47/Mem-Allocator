@@ -14,7 +14,4 @@ add_executable(main main.cpp)
 target_link_libraries(main PRIVATE alloc)
 
 
-option(BUILD_TESTS "Build tests" OFF)
-if(BUILD_TESTS)
-    add_subdirectory(tests)
-endif()
+add_subdirectory(tests)
