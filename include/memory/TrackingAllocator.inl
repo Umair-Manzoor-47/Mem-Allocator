@@ -6,7 +6,7 @@
 template <class T>
 T* TrackingAllocator<T>::allocate(std::size_t numObjects)
 {
-    mAllocations += numObjects;
+    AllocatorStats::instance().allocateBytes(sizeof(T) * numObjects);
     return static_cast<T*>(operator new(sizeof(T) * numObjects));
 }
 
@@ -33,5 +33,6 @@ void TrackingAllocator<T>::destroy(U* p)
 template <class T>
 void TrackingAllocator<T>::deallocate(T* p, std::size_t numObjects)
 {
+    AllocatorStats::instance().deallocateBytes(sizeof(T) * numObjects);
     operator delete(p);
 }

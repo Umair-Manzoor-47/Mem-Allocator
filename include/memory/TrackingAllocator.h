@@ -1,12 +1,11 @@
 #pragma once
 #include <cstddef>
 #include <limits>
-
+#include <memory/AllocatorStats.h>
 
 template <class T>
 class TrackingAllocator
 {
-    static std::size_t mAllocations;
 
 public:
 
@@ -27,10 +26,8 @@ public:
 
     void deallocate(T* p, std::size_t numObjects);
 
-    std::size_t getAllocations() const { return mAllocations; };
+    std::size_t getLiveBytes() const { return AllocatorStats::instance().GetLiveBytes(); };
 
     std::size_t max_size() const { return std::numeric_limits<std::size_t>::max(); };
 };
-template <class T>
-std::size_t  TrackingAllocator<T>::mAllocations = 0;
 #include "TrackingAllocator.inl"
