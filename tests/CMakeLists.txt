@@ -8,7 +8,10 @@ FetchContent_Declare(
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_MakeAvailable(doctest)
 
-add_executable(tests test_linear_allocator.cpp)
+add_executable(tests
+        test_linear_allocator.cpp
+        test_tracking_allocator.cpp
+)
 target_link_libraries(tests PRIVATE alloc doctest::doctest)
 
 include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)

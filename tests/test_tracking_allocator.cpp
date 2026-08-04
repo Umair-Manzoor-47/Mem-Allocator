@@ -1,9 +1,14 @@
-﻿#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <doctest/doctest.h>
+﻿#include <doctest/doctest.h>
 #include <memory/TrackingAllocator.h>
 #include <memory/AllocatorStats.h>
 #include <vector>
 #include <list>
+
+struct Counted {
+    static inline int alive = 0;
+    Counted() { ++alive; }
+    ~Counted() { --alive; }
+};
 
 TEST_CASE("allocate increases live bytes by the correct size") {
     AllocatorStats::instance().resetForTesting();
@@ -63,11 +68,7 @@ TEST_CASE("stats are shared across different TrackingAllocator<T> types") {
 TEST_CASE("construct and destroy actually invoke ctor/dtor") {
     AllocatorStats::instance().resetForTesting();
 
-    struct Counted {
-        static inline int alive = 0;
-        Counted() { ++alive; }
-        ~Counted() { --alive; }
-    };
+
 
     TrackingAllocator<Counted> a;
     Counted* p = a.allocate(1);
