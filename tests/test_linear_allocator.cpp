@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
-#include <memory/linear_allocator.h>
+#include <memory/LinearAllocator.h>
 
 TEST_CASE("allocations are properly aligned") {
     LinearAllocator allocator(1024);
@@ -19,6 +19,19 @@ TEST_CASE("allocator returns nullptr when out of space") {
 
     void* p2 = allocator.allocate(8);
     CHECK(p2 == nullptr);
+}
+
+TEST_CASE("allocate A struct with int + float + string") {
+    LinearAllocator allocator(64);
+
+    struct A {
+        int a{4};
+        float b{3.14f};
+        std::string c{"Hello"};
+    };
+
+    allocator.allocate(sizeof(A));
+    CHECK(allocator.used() == 40);
 }
 
 TEST_CASE("reset reclaims the whole arena") {

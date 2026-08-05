@@ -4,8 +4,9 @@
 #include <vector>
 #include <memory/TrackingAllocator.h>
 #include <memory/AllocatorStats.h>
-#include <memory/linear_allocator.h>
+#include <memory/LinearAllocator.h>
 #include <demo/shape.h>
+#include <memory/StackAllocator.h>
 
 inline void print_section(const std::string& title) {
     std::cout << "\n========== " << title << " ==========\n";
@@ -99,4 +100,141 @@ inline void demo_linear_allocator() {
     std::cout << "  after reset(), used: " << allocator.used() << " / " << allocator.capacity() << "\n";
     std::cout << "  (reset() rewinds the pointer -- it does NOT call destructors, which is why we called ~Shape() first;\n";
     std::cout << "   forgetting that step would leak any resources the object owned, even though the arena itself is 'freed')\n";
+}
+
+// -------------------------------- Stack Allocator ----------------------------------------------------
+
+inline void demo_stack_allocator() {
+    print_section("StackAllocator demo");
+
+    StackAllocator allocator(64); // small on purpose
+
+    std::cout << "[start] capacity: "
+              << allocator.capacity()
+              << " bytes, used: "
+              << allocator.used()
+              << " bytes\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- allocating an int (4 bytes) --\n";
+
+    int* a = static_cast<int*>(
+        allocator.allocate(sizeof(int), alignof(int)));
+
+    *a = 42;
+
+    std::cout << "  address: " << a << "\n";
+    std::cout << "  value: " << *a << "\n";
+    std::cout << "  used: "
+              << allocator.used()
+              << " / "
+              << allocator.capacity()
+              << "\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- saving a stack marker --\n";
+
+    StackAllocator::Marker marker = allocator.get_marker();
+
+    std::cout << "  marker = " << marker << " bytes\n";
+    std::cout << "  (everything allocated after this marker can be freed together)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- allocating a float and a double --\n";
+
+    float* b = static_cast<float*>(
+        allocator.allocate(sizeof(float), alignof(float)));
+
+    double* c = static_cast<double*>(
+        allocator.allocate(sizeof(double), alignof(double)));
+
+    *b = 3.14f;
+    *c = 99.99;
+
+    std::cout << "  float  address: " << b << "\n";
+    std::cout << "  double address: " << c << "\n";
+
+    std::cout << "  used: "
+              << allocator.used()
+              << " / "
+              << allocator.capacity()
+              << "\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- constructing a Circle using placement new --\n";
+
+    void* circleMem =
+        allocator.allocate(sizeof(Circle), alignof(Circle));
+
+    Circle* circle = new (circleMem) Circle();
+
+    std::cout << "  Circle constructed at: " << circle << "\n";
+    circle->draw();
+
+    std::cout << "  used: "
+              << allocator.used()
+              << " / "
+              << allocator.capacity()
+              << "\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- rolling back to the saved marker --\n";
+
+    // Placement-new objects must be destroyed manually before rollback.
+    circle->~Circle();
+
+    allocator.free_to_marker(marker);
+
+    std::cout << "  used: "
+              << allocator.used()
+              << " / "
+              << allocator.capacity()
+              << "\n";
+
+    std::cout << "  (the float, double, and Circle memory became available\n"
+                 "   instantly because the allocator simply moved its pointer\n"
+                 "   back to the saved marker)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- allocating again after rollback --\n";
+
+    char* d = static_cast<char*>(
+        allocator.allocate(16, alignof(char)));
+
+    std::cout << "  new allocation address: "
+              << static_cast<void*>(d)
+              << "\n";
+
+    std::cout << "  used: "
+              << allocator.used()
+              << " / "
+              << allocator.capacity()
+              << "\n";
+
+    std::cout << "  (notice this allocation likely reuses the same memory\n"
+                 "   previously occupied by the float, double, and Circle)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- deliberately exhausting the stack allocator --\n";
+
+    void* overflow = allocator.allocate(1000);
+
+    std::cout << "  requested 1000 bytes, result: "
+              << (overflow ? "UNEXPECTED non-null!" : "nullptr (correctly rejected)")
+              << "\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- resetting the allocator --\n";
+
+    allocator.reset();
+
+    std::cout << "  after reset(), used: "
+              << allocator.used()
+              << " / "
+              << allocator.capacity()
+              << "\n";
+
+    std::cout << "  (reset() rewinds the stack to the beginning.\n"
+                 "   Like free_to_marker(), it DOES NOT call destructors,\n"
+                 "   so any placement-new objects must be destroyed first.)\n";
 }

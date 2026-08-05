@@ -33,8 +33,8 @@ public:
         m_current = m_start;
     }
 
-    size_t used() const { return m_current - m_start; }
-    size_t capacity() const { return m_size; }
+    [[nodiscard]] size_t used() const { return m_current - m_start; }
+    [[nodiscard]] size_t capacity() const { return m_size; }
 
 private:
     size_t m_size;

@@ -26,8 +26,8 @@ public:
 
     void deallocate(T* p, std::size_t numObjects) noexcept;
 
-    std::size_t getLiveBytes() const { return AllocatorStats::instance().getLiveBytes(); }
-    std::size_t max_size() const { return std::numeric_limits<std::size_t>::max(); }
+    [[nodiscard]] std::size_t getLiveBytes() const { return AllocatorStats::instance().getLiveBytes(); }
+    [[nodiscard]] std::size_t max_size() const { return std::numeric_limits<std::size_t>::max(); }
 };
 
 template <class T, class U>
