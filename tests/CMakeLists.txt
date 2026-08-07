@@ -12,6 +12,7 @@ add_executable(tests
         test_linear_allocator.cpp
         test_tracking_allocator.cpp
         test_stack_allocator.cpp
+        test_pool_allocator.cpp
 )
 target_link_libraries(tests PRIVATE alloc doctest::doctest)
 
