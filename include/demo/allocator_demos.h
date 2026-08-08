@@ -7,6 +7,7 @@
 #include <memory/LinearAllocator.h>
 #include <demo/shape.h>
 #include <memory/StackAllocator.h>
+#include <memory/PoolAllocator.h>
 
 inline void print_section(const std::string& title) {
     std::cout << "\n========== " << title << " ==========\n";
@@ -237,4 +238,138 @@ inline void demo_stack_allocator() {
     std::cout << "  (reset() rewinds the stack to the beginning.\n"
                  "   Like free_to_marker(), it DOES NOT call destructors,\n"
                  "   so any placement-new objects must be destroyed first.)\n";
+}
+
+// -------------------------------- Pool Allocator ----------------------------------------------------
+
+inline void demo_pool_allocator() {
+    print_section("PoolAllocator demo");
+
+    // A pool allocator gives us a fixed number of equally-sized chunks.
+    // Every allocation returns exactly one chunk.
+    //
+    // We'll use a small pool on purpose so that we can easily demonstrate:
+    //   1. Allocation from the free list
+    //   2. Releasing chunks back into the pool
+    //   3. Reusing released chunks
+    //   4. Running out of chunks
+
+    constexpr std::size_t chunkSize = sizeof(int);
+    constexpr std::size_t chunkCount = 4;
+
+    PoolAllocator allocator(chunkSize, chunkCount);
+
+    std::cout << "[start] chunk size:  "
+              << allocator.chunk_size()
+              << " bytes\n";
+
+    std::cout << "        chunk count: "
+              << allocator.chunk_count()
+              << "\n";
+
+    std::cout << "        total pool:  "
+              << allocator.chunk_size() * allocator.chunk_count()
+              << " bytes\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- allocating four integers --\n";
+
+    int* a = static_cast<int*>(allocator.allocate());
+    int* b = static_cast<int*>(allocator.allocate());
+    int* c = static_cast<int*>(allocator.allocate());
+    int* d = static_cast<int*>(allocator.allocate());
+
+    *a = 10;
+    *b = 20;
+    *c = 30;
+    *d = 40;
+
+    std::cout << "  a = " << *a << " at " << static_cast<void*>(a) << "\n";
+    std::cout << "  b = " << *b << " at " << static_cast<void*>(b) << "\n";
+    std::cout << "  c = " << *c << " at " << static_cast<void*>(c) << "\n";
+    std::cout << "  d = " << *d << " at " << static_cast<void*>(d) << "\n";
+
+    std::cout << "  (each allocation consumes exactly one fixed-size chunk)\n";
+    std::cout << "  (there is no searching for a suitable block and no heap allocation per integer)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- pool is now exhausted --\n";
+
+    void* exhausted = allocator.allocate();
+
+    std::cout << "  fifth allocation result: "
+              << (exhausted ? "UNEXPECTED non-null!" : "nullptr (correctly rejected)")
+              << "\n";
+
+    std::cout << "  (the pool contains exactly "
+              << allocator.chunk_count()
+              << " chunks, so the fifth allocation cannot succeed)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- returning two chunks to the pool --\n";
+
+    allocator.deallocate(b);
+    allocator.deallocate(d);
+
+    std::cout << "  returned b and d to the free list\n";
+    std::cout << "  (deallocate() does not call delete or return memory to the OS;\n"
+                 "   it simply puts the chunk back into the allocator's free list)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- allocating again after deallocation --\n";
+
+    int* e = static_cast<int*>(allocator.allocate());
+    int* f = static_cast<int*>(allocator.allocate());
+
+    *e = 50;
+    *f = 60;
+
+    std::cout << "  e = " << *e << " at " << static_cast<void*>(e) << "\n";
+    std::cout << "  f = " << *f << " at " << static_cast<void*>(f) << "\n";
+
+    std::cout << "\n  address reuse:\n";
+    std::cout << "    b was at " << static_cast<void*>(b) << "\n";
+    std::cout << "    e is  at " << static_cast<void*>(e) << "\n";
+
+    std::cout << "    d was at " << static_cast<void*>(d) << "\n";
+    std::cout << "    f is  at " << static_cast<void*>(f) << "\n";
+
+    std::cout << "\n  (notice how the allocator reuses the chunks that were just freed)\n";
+    std::cout << "  (this is the key idea behind a pool allocator:\n"
+                 "   allocation and deallocation are extremely cheap because\n"
+                 "   the memory was already reserved up front)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- demonstrating constant-size allocation --\n";
+
+    std::cout << "  sizeof(int): "
+              << sizeof(int)
+              << " bytes\n";
+
+    std::cout << "  pool chunk size: "
+              << allocator.chunk_size()
+              << " bytes\n";
+
+    std::cout << "  every allocate() returns exactly one chunk of this size\n";
+    std::cout << "  (unlike a general-purpose allocator, this pool cannot satisfy\n"
+                 "   arbitrary allocation sizes)\n";
+
+    // ---------------------------------------------------------------------
+    std::cout << "\n-- cleaning up allocated chunks --\n";
+
+    allocator.deallocate(a);
+    allocator.deallocate(c);
+    allocator.deallocate(e);
+    allocator.deallocate(f);
+
+    std::cout << "  all chunks returned to the pool\n";
+    std::cout << "  pool allocator destructor will release the entire backing block\n";
+
+    std::cout << "\n  PoolAllocator takeaway:\n";
+    std::cout << "    * fixed-size allocations\n"
+                 "    * O(1) allocate()\n"
+                 "    * O(1) deallocate()\n"
+                 "    * no per-object heap allocation\n"
+                 "    * freed chunks are immediately reusable\n"
+                 "    * excellent for many objects of the same size\n";
 }
