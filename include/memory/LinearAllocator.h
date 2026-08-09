@@ -35,7 +35,9 @@ public:
 
     [[nodiscard]] size_t used() const { return m_current - m_start; }
     [[nodiscard]] size_t capacity() const { return m_size; }
-
+    size_t offset_of(const void* ptr) const {
+        return static_cast<const std::byte*>(ptr) - m_start;
+    }
 private:
     size_t m_size;
     std::byte* m_start;

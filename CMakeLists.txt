@@ -15,3 +15,7 @@ target_link_libraries(main PRIVATE alloc)
 
 
 add_subdirectory(tests)
+option(BUILD_VISUALIZER "Build 3D memory visualizer" ON)
+if(BUILD_VISUALIZER)
+    add_subdirectory(visualizer)
+endif()
