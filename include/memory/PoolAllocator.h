@@ -47,5 +47,37 @@ public:
     }
     std::size_t chunk_size() const { return m_chunkSize; }
     std::size_t chunk_count() const { return m_chunkCount; }
+    [[nodiscard]] bool contains(const void* ptr) const
+    {
+        if (ptr == nullptr) {
+            return false;
+        }
+
+        const auto* bytePtr = static_cast<const std::byte*>(ptr);
+
+        if (bytePtr < m_start) {
+            return false;
+        }
+
+        const std::byte* end = m_start + m_chunkSize * m_chunkCount;
+        if (bytePtr >= end) {
+            return false;
+        }
+
+        const std::size_t offset =
+            static_cast<std::size_t>(bytePtr - m_start);
+
+        return offset % m_chunkSize == 0;
+    }
+
+    [[nodiscard]] std::size_t slot_index(const void* ptr) const
+    {
+        if (!contains(ptr)) {
+            return m_chunkCount;
+        }
+
+        const auto* bytePtr = static_cast<const std::byte*>(ptr);
+        return static_cast<std::size_t>(bytePtr - m_start) / m_chunkSize;
+    }
 
 };

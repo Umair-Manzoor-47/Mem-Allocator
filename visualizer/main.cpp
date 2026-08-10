@@ -1,14 +1,19 @@
 #include <raylib.h>
 
+#include <memory/AllocatorStats.h>
 #include <memory/LinearAllocator.h>
 #include <memory/PoolAllocator.h>
 #include <memory/StackAllocator.h>
 #include <memory/TrackingAllocator.h>
 
+#include <new>
+
 #include "memory_scene.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
+#include <string>
 #include <vector>
 
 struct Preset {
@@ -27,60 +32,89 @@ static constexpr Preset PRESETS[] = {
 };
 
 struct Allocation {
-    void* ptr;
-    size_t start;
-    size_t size;
-    size_t marker;
+    void* ptr{};
+    size_t start{};
+    size_t size{};
+    size_t marker{};
 };
+
+namespace
+{
+    constexpr size_t ARENA_SIZE = 256;
+    constexpr size_t POOL_CHUNK_SIZE = 16;
+    constexpr size_t POOL_CHUNK_COUNT = 16;
+
+    int presetIndex(SceneAction action)
+    {
+        switch (action) {
+        case SceneAction::Char:   return 0;
+        case SceneAction::Int:    return 1;
+        case SceneAction::Double: return 2;
+        case SceneAction::Circle: return 3;
+        case SceneAction::Square: return 4;
+        default:                  return -1;
+        }
+    }
+
+    const char* allocatorName(AllocatorType allocator)
+    {
+        switch (allocator) {
+        case AllocatorType::Linear:   return "Linear";
+        case AllocatorType::Stack:    return "Stack";
+        case AllocatorType::Pool:     return "Pool";
+        case AllocatorType::Tracking: return "Tracking";
+        }
+
+        return "Unknown";
+    }
+
+    const char* allocatorConcept(AllocatorType allocator)
+    {
+        switch (allocator) {
+        case AllocatorType::Linear:
+            return "Bump pointer: allocations move forward; only reset releases memory.";
+
+        case AllocatorType::Stack:
+            return "LIFO storage: the top can pop, or rewind to a saved marker.";
+
+        case AllocatorType::Pool:
+            return "Fixed-size slots: allocation takes one free slot from a free list.";
+
+        case AllocatorType::Tracking:
+            return "General heap allocation with live-byte statistics; map below is visual.";
+        }
+
+        return "";
+    }
+
+    void clearVisualTracking(
+        std::vector<bool>& used,
+        const Allocation& allocation
+    )
+    {
+        const size_t end =
+            std::min(used.size(), allocation.start + allocation.size);
+
+        for (size_t i = allocation.start; i < end; ++i) {
+            used[i] = false;
+        }
+    }
+}
 
 int main()
 {
-    InitWindow(
-        1100,
-        700,
-        "Memory Lab"
-    );
-
+    InitWindow(1100, 700, "Memory Lab");
     SetTargetFPS(60);
 
-    // --------------------------------------------------
-    // Camera
-    // --------------------------------------------------
-
     Camera3D camera{};
-
-    camera.position = {
-        7.5f,
-        9.0f,
-        7.5f
-    };
-
-    camera.target = {
-        0.0f,
-        0.0f,
-        0.0f
-    };
-
-    camera.up = {
-        0.0f,
-        1.0f,
-        0.0f
-    };
-
+    camera.position = {7.5f, 9.0f, 7.5f};
+    camera.target = {0.0f, 0.0f, 0.0f};
+    camera.up = {0.0f, 1.0f, 0.0f};
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
 
-    // --------------------------------------------------
-    // Allocators
-    // --------------------------------------------------
-
-    constexpr size_t ARENA_SIZE = 256;
-
     LinearAllocator linear(ARENA_SIZE);
     StackAllocator stack(ARENA_SIZE);
-
-    constexpr size_t POOL_CHUNK_SIZE = 16;
-    constexpr size_t POOL_CHUNK_COUNT = 16;
 
     PoolAllocator pool(
         POOL_CHUNK_SIZE,
@@ -89,192 +123,319 @@ int main()
 
     TrackingAllocator<std::byte> tracking;
 
-    // --------------------------------------------------
-    // Visualizer
-    // --------------------------------------------------
-
     MemoryScene scene(
         ARENA_SIZE,
         16,
         0.45f
     );
 
-    AllocatorType currentAllocator =
-        AllocatorType::Linear;
+    AllocatorType currentAllocator = AllocatorType::Linear;
 
-    scene.pushLog(
-        "Linear allocator ready"
-    );
-
-    // Stack allocations.
+    std::vector<Allocation> linearAllocations;
     std::vector<Allocation> stackAllocations;
-
-    // Pool allocations.
     std::vector<Allocation> poolAllocations;
-
-    // Tracking allocations.
     std::vector<Allocation> trackingAllocations;
 
-    // Virtual placement for tracking visualization.
     std::vector<bool> trackingUsed(
         ARENA_SIZE,
         false
     );
 
-    // --------------------------------------------------
-    // Main loop
-    // --------------------------------------------------
+    bool stackMarkerValid = false;
+    StackAllocator::Marker stackMarker = 0;
 
-    while (!WindowShouldClose())
-    {
+    scene.pushLog("Linear ready: bump pointer starts at 0.");
+    scene.setCursor(0);
+
+    while (!WindowShouldClose()) {
         const float dt = GetFrameTime();
-
-        // ==================================================
-        // UI
-        // ==================================================
-
-        SceneInput input =
+        const SceneInput input =
             scene.handleInput(currentAllocator);
 
         // --------------------------------------------------
-        // Change allocator
+        // Allocator selection
         // --------------------------------------------------
 
-        if (input.action == SceneAction::None) {
+        if (input.action == SceneAction::None &&
+            input.allocator != currentAllocator)
+        {
+            currentAllocator = input.allocator;
 
-            if (input.allocator != currentAllocator) {
+            scene.onReset();
+            scene.clearMarker();
+            stackMarkerValid = false;
+            linearAllocations.clear();
+            stackAllocations.clear();
 
-                currentAllocator =
-                    input.allocator;
-
-                scene.onReset();
-
-                switch (currentAllocator) {
-
-                case AllocatorType::Linear:
-                    scene.pushLog(
-                        "Switched to Linear"
-                    );
-                    break;
-
-                case AllocatorType::Stack:
-                    scene.pushLog(
-                        "Switched to Stack"
-                    );
-                    break;
-
-                case AllocatorType::Pool:
-                    scene.pushLog(
-                        "Switched to Pool"
-                    );
-                    break;
-
-                case AllocatorType::Tracking:
-                    scene.pushLog(
-                        "Switched to Tracking"
-                    );
-                    break;
-                }
+            // Release every demo allocation before changing the view.
+            for (auto& allocation : poolAllocations) {
+                pool.deallocate(allocation.ptr);
             }
+
+            for (auto& allocation : trackingAllocations) {
+                tracking.deallocate(
+                    static_cast<std::byte*>(allocation.ptr),
+                    allocation.size
+                );
+            }
+
+            poolAllocations.clear();
+            trackingAllocations.clear();
+            linear.reset();
+            stack.reset();
+
+            std::fill(
+                trackingUsed.begin(),
+                trackingUsed.end(),
+                false
+            );
+            AllocatorStats::instance().reset();
+
+            scene.pushLog(
+                std::string("Switched to ") + allocatorName(currentAllocator)
+            );
+
+            if (currentAllocator == AllocatorType::Linear) {
+                scene.setCursor(linear.used());
+            }
+            else if (currentAllocator == AllocatorType::Stack) {
+                scene.setCursor(stack.used());
+            }
+
+            continue;
         }
 
-        // ==================================================
+        // --------------------------------------------------
         // RESET
-        // ==================================================
+        // --------------------------------------------------
 
-        if (input.action == SceneAction::Reset)
-        {
+        if (input.action == SceneAction::Reset) {
             switch (currentAllocator) {
-
             case AllocatorType::Linear:
                 linear.reset();
+                linearAllocations.clear();
                 break;
 
             case AllocatorType::Stack:
                 stack.reset();
                 stackAllocations.clear();
+                stackMarkerValid = false;
+                scene.clearMarker();
                 break;
 
             case AllocatorType::Pool:
                 for (auto& allocation : poolAllocations) {
-                    pool.deallocate(
-                        allocation.ptr
-                    );
+                    pool.deallocate(allocation.ptr);
                 }
-
                 poolAllocations.clear();
                 break;
 
             case AllocatorType::Tracking:
-                for (auto& allocation :
-                     trackingAllocations)
-                {
+                for (auto& allocation : trackingAllocations) {
                     tracking.deallocate(
-                        static_cast<std::byte*>(
-                            allocation.ptr
-                        ),
+                        static_cast<std::byte*>(allocation.ptr),
                         allocation.size
                     );
                 }
-
                 trackingAllocations.clear();
-
                 std::fill(
                     trackingUsed.begin(),
                     trackingUsed.end(),
                     false
                 );
-
+                AllocatorStats::instance().reset();
                 break;
             }
 
             scene.onReset();
-
-            scene.pushLog("RESET");
+            scene.pushLog(
+                std::string("RESET ") + allocatorName(currentAllocator)
+            );
         }
 
-        // ==================================================
-        // ALLOCATION
-        // ==================================================
+        // --------------------------------------------------
+        // DEALLOCATE / POP / MARKER
+        // --------------------------------------------------
 
-        const int presetIndex =
-            [&]() -> int
-        {
-            switch (input.action) {
-            case SceneAction::Char:
-                return 0;
+        if (input.action == SceneAction::Deallocate) {
+            switch (currentAllocator) {
+            case AllocatorType::Linear:
+                // Disabled in the UI: linear allocator has no individual free.
+                scene.pushLog("Linear: individual deallocate is not supported.");
+                break;
 
-            case SceneAction::Int:
-                return 1;
+            case AllocatorType::Stack:
+                // Stack uses POP instead of generic deallocate.
+                scene.pushLog("Stack: use POP or FREE TO MARKER.");
+                break;
 
-            case SceneAction::Double:
-                return 2;
+            case AllocatorType::Pool:
+                if (poolAllocations.empty()) {
+                    scene.pushLog("Pool deallocate: no live slots.");
+                    break;
+                }
 
-            case SceneAction::Circle:
-                return 3;
+                {
+                    const Allocation allocation =
+                        poolAllocations.back();
 
-            case SceneAction::Square:
-                return 4;
+                    pool.deallocate(allocation.ptr);
+                    poolAllocations.pop_back();
 
-            default:
-                return -1;
+                    scene.onFreeRange(
+                        allocation.start * POOL_CHUNK_SIZE,
+                        POOL_CHUNK_SIZE
+                    );
+
+                    scene.pushLog(
+                        "POOL FREE slot " +
+                        std::to_string(allocation.start) +
+                        " (16B returned to free list)"
+                    );
+                }
+                break;
+
+            case AllocatorType::Tracking:
+                if (trackingAllocations.empty()) {
+                    scene.pushLog("Tracking deallocate: no live allocations.");
+                    break;
+                }
+
+                {
+                    const Allocation allocation =
+                        trackingAllocations.back();
+
+                    tracking.deallocate(
+                        static_cast<std::byte*>(allocation.ptr),
+                        allocation.size
+                    );
+
+                    clearVisualTracking(
+                        trackingUsed,
+                        allocation
+                    );
+
+                    trackingAllocations.pop_back();
+                    scene.onFreeRange(
+                        allocation.start,
+                        allocation.size
+                    );
+
+                    scene.pushLog(
+                        "TRACK FREE " +
+                        std::to_string(allocation.size) +
+                        "B at " +
+                        std::to_string(allocation.start)
+                    );
+                }
+                break;
             }
-        }();
+        }
 
-        if (presetIndex >= 0)
+        if (input.action == SceneAction::Pop) {
+            if (stackAllocations.empty()) {
+                scene.pushLog("Stack POP: stack is empty.");
+            }
+            else {
+                const Allocation allocation =
+                    stackAllocations.back();
+
+                const size_t oldUsed = stack.used();
+
+                stack.free_to_marker(
+                    allocation.marker
+                );
+
+                stackAllocations.pop_back();
+
+                scene.onFreeRange(
+                    allocation.marker,
+                    oldUsed - allocation.marker
+                );
+
+                scene.setCursor(stack.used());
+
+                scene.pushLog(
+                    "POP -> " +
+                    std::to_string(stack.used()) +
+                    "B used"
+                );
+
+                if (stackMarkerValid &&
+                    stackMarker > stack.used())
+                {
+                    stackMarkerValid = false;
+                    scene.clearMarker();
+                }
+            }
+        }
+
+        if (input.action == SceneAction::SetMarker &&
+            currentAllocator == AllocatorType::Stack)
         {
-            const Preset& preset =
-                PRESETS[presetIndex];
+            stackMarker = stack.get_marker();
+            stackMarkerValid = true;
+            scene.setMarker(stackMarker);
 
-            // ==================================================
-            // LINEAR
-            // ==================================================
+            scene.pushLog(
+                "MARKER set at " +
+                std::to_string(stackMarker) +
+                "B"
+            );
+        }
 
-            if (currentAllocator ==
-                AllocatorType::Linear)
+        if (input.action == SceneAction::FreeMarker &&
+            currentAllocator == AllocatorType::Stack)
+        {
+            if (!stackMarkerValid) {
+                scene.pushLog("No stack marker is set.");
+            }
+            else if (stackMarker > stack.used()) {
+                scene.pushLog("Marker is beyond current stack; ignored.");
+                stackMarkerValid = false;
+                scene.clearMarker();
+            }
+            else {
+                const size_t oldUsed = stack.used();
+
+                stack.free_to_marker(stackMarker);
+
+                while (!stackAllocations.empty() &&
+                       stackAllocations.back().marker >= stackMarker)
+                {
+                    stackAllocations.pop_back();
+                }
+
+                scene.onFreeRange(
+                    stackMarker,
+                    oldUsed - stackMarker
+                );
+
+                scene.setCursor(stack.used());
+                scene.pushLog(
+                    "FREE TO MARKER -> " +
+                    std::to_string(stackMarker) +
+                    "B used"
+                );
+
+                stackMarkerValid = false;
+                scene.clearMarker();
+            }
+        }
+
+        // --------------------------------------------------
+        // ALLOCATION
+        // --------------------------------------------------
+
+        const int index = presetIndex(input.action);
+
+        if (index >= 0) {
+            const Preset& preset = PRESETS[index];
+
+            switch (currentAllocator) {
+            case AllocatorType::Linear:
             {
-                const size_t before =
-                    linear.used();
+                const size_t before = linear.used();
 
                 void* ptr =
                     linear.allocate(
@@ -282,50 +443,57 @@ int main()
                         preset.align
                     );
 
-                if (ptr) {
-
-                    const size_t start =
-                        linear.offset_of(ptr);
-
-                    scene.onAllocate(
-                        start,
-                        preset.size,
-                        start - before,
-                        preset.color
-                    );
-
+                if (!ptr) {
                     scene.pushLog(
-                        TextFormat(
-                            "ALLOC %s  %zuB  pad=%zu",
-                            preset.name,
-                            preset.size,
-                            start - before
-                        )
+                        std::string("ALLOC ") +
+                        preset.name +
+                        " FAILED: not enough aligned space."
                     );
-
-                } else {
-                    scene.pushLog(
-                        TextFormat(
-                            "ALLOC %s FAILED",
-                            preset.name
-                        )
-                    );
+                    break;
                 }
+
+                const size_t start =
+                    linear.offset_of(ptr);
+
+                const size_t padding =
+                    start - before;
+
+                scene.onAllocate(
+                    start,
+                    preset.size,
+                    padding,
+                    preset.color,
+                    std::string(preset.name) +
+                    " " +
+                    std::to_string(preset.size) +
+                    "B"
+                );
+
+                linearAllocations.push_back({
+                    ptr,
+                    start,
+                    preset.size,
+                    before
+                });
+
+                scene.setCursor(linear.used());
+
+                scene.pushLog(
+                    "ALLOC " +
+                    std::string(preset.name) +
+                    " " +
+                    std::to_string(preset.size) +
+                    "B, pad " +
+                    std::to_string(padding) +
+                    "B"
+                );
+                break;
             }
 
-            // ==================================================
-            // STACK
-            // ==================================================
-
-            else if (
-                currentAllocator ==
-                AllocatorType::Stack)
+            case AllocatorType::Stack:
             {
-                const size_t before =
-                    stack.used();
-
-                const auto marker =
-                    stack.get_marker();
+                const size_t before = stack.used();
+                const auto marker = stack.get_marker();
 
                 void* ptr =
                     stack.allocate(
@@ -333,242 +501,255 @@ int main()
                         preset.align
                     );
 
-                if (ptr) {
-
-                    const size_t start =
-                        before;
-
-                    stackAllocations.push_back({
-                        ptr,
-                        start,
-                        preset.size,
-                        marker
-                    });
-
-                    scene.onAllocate(
-                        start,
-                        preset.size,
-                        start - before,
-                        preset.color
-                    );
-
+                if (!ptr) {
                     scene.pushLog(
-                        TextFormat(
-                            "PUSH %s  %zuB",
-                            preset.name,
-                            preset.size
-                        )
+                        std::string("PUSH ") +
+                        preset.name +
+                        " FAILED: stack full."
                     );
-
-                } else {
-                    scene.pushLog(
-                        TextFormat(
-                            "PUSH %s FAILED",
-                            preset.name
-                        )
-                    );
+                    break;
                 }
+
+                // The allocator's real pointer is deliberately not used
+                // for visualization. Its logical offset is deterministic.
+                const size_t logicalStart =
+                    stack.used() - preset.size;
+
+                const size_t padding =
+                    logicalStart - before;
+
+                stackAllocations.push_back({
+                    ptr,
+                    logicalStart,
+                    preset.size,
+                    marker
+                });
+
+                scene.onAllocate(
+                    logicalStart,
+                    preset.size,
+                    padding,
+                    preset.color,
+                    std::string(preset.name) +
+                    " " +
+                    std::to_string(preset.size) +
+                    "B"
+                );
+
+                scene.setCursor(stack.used());
+
+                scene.pushLog(
+                    "PUSH " +
+                    std::string(preset.name) +
+                    " " +
+                    std::to_string(preset.size) +
+                    "B, pad " +
+                    std::to_string(padding) +
+                    "B"
+                );
+
+                break;
             }
 
-            // ==================================================
-            // POOL
-            // ==================================================
-
-            else if (
-                currentAllocator ==
-                AllocatorType::Pool)
+            case AllocatorType::Pool:
             {
-                if (preset.size >
-                    POOL_CHUNK_SIZE)
-                {
+                if (preset.size > POOL_CHUNK_SIZE) {
                     scene.pushLog(
-                        TextFormat(
-                            "%s too large for pool",
-                            preset.name
-                        )
+                        std::string(preset.name) +
+                        " does not fit in a 16B pool slot."
                     );
+                    break;
                 }
-                else {
 
-                    void* ptr =
-                        pool.allocate();
+                void* ptr = pool.allocate();
 
-                    if (ptr) {
-
-                        const auto index =
-                            static_cast<size_t>(
-                                static_cast<std::byte*>(
-                                    ptr
-                                ) -
-                                static_cast<std::byte*>(
-                                    nullptr
-                                )
-                            );
-
-                        // Pool memory isn't exposed by
-                        // PoolAllocator, so visual slots
-                        // are assigned separately.
-
-                        size_t slot = 0;
-
-                        bool found = false;
-
-                        for (; slot < poolAllocations.size();
-                             ++slot)
-                        {
-                            bool occupied = false;
-
-                            for (const auto& a :
-                                 poolAllocations)
-                            {
-                                if (a.start == slot) {
-                                    occupied = true;
-                                    break;
-                                }
-                            }
-
-                            if (!occupied) {
-                                found = true;
-                                break;
-                            }
-                        }
-
-                        if (!found) {
-                            slot = poolAllocations.size();
-                        }
-
-                        poolAllocations.push_back({
-                            ptr,
-                            slot,
-                            preset.size,
-                            0
-                        });
-
-                        scene.onAllocate(
-                            slot,
-                            1,
-                            0,
-                            preset.color
-                        );
-
-                        scene.pushLog(
-                            TextFormat(
-                                "POOL ALLOC %s",
-                                preset.name
-                            )
-                        );
-                    }
-                    else {
-                        scene.pushLog(
-                            TextFormat(
-                                "POOL %s FAILED",
-                                preset.name
-                            )
-                        );
-                    }
+                if (!ptr) {
+                    scene.pushLog("POOL ALLOC FAILED: all slots are busy.");
+                    break;
                 }
+
+                const size_t slot =
+                    pool.slot_index(ptr);
+
+                poolAllocations.push_back({
+                    ptr,
+                    slot,
+                    preset.size,
+                    0
+                });
+
+                scene.onAllocate(
+                    slot * POOL_CHUNK_SIZE,
+                    POOL_CHUNK_SIZE,
+                    0,
+                    preset.color,
+                    "slot " +
+                    std::to_string(slot)
+                );
+
+                scene.pushLog(
+                    "POOL ALLOC slot " +
+                    std::to_string(slot) +
+                    " <- " +
+                    preset.name +
+                    " (" +
+                    std::to_string(preset.size) +
+                    "B / 16B)"
+                );
+                break;
             }
 
-            // ==================================================
-            // TRACKING
-            // ==================================================
-
-            else if (
-                currentAllocator ==
-                AllocatorType::Tracking)
+            case AllocatorType::Tracking:
             {
-                std::byte* ptr =
-                    tracking.allocate(
-                        preset.size
+                std::byte* ptr = nullptr;
+
+                try {
+                    ptr = tracking.allocate(preset.size);
+                }
+                catch (const std::bad_alloc&) {
+                    scene.pushLog(
+                        "TRACK ALLOC FAILED: system heap allocation failed."
                     );
+                    break;
+                }
 
-                if (ptr) {
+                // TrackingAllocator uses the real heap. The visual arena is
+                // only a deterministic map so fragmentation can be taught.
+                size_t start = ARENA_SIZE;
 
-                    // Find a free visual range.
-                    size_t start =
-                        ARENA_SIZE;
+                for (
+                    size_t i = 0;
+                    i + preset.size <= ARENA_SIZE;
+                    ++i
+                ) {
+                    bool free = true;
 
-                    for (
-                        size_t i = 0;
-                        i + preset.size <= ARENA_SIZE;
-                        ++i
-                    ) {
-                        bool free = true;
-
-                        for (
-                            size_t j = 0;
-                            j < preset.size;
-                            ++j
-                        ) {
-                            if (trackingUsed[i + j]) {
-                                free = false;
-                                break;
-                            }
-                        }
-
-                        if (free) {
-                            start = i;
+                    for (size_t j = 0; j < preset.size; ++j) {
+                        if (trackingUsed[i + j]) {
+                            free = false;
                             break;
                         }
                     }
 
-                    if (start < ARENA_SIZE) {
-
-                        for (
-                            size_t i = 0;
-                            i < preset.size;
-                            ++i
-                        ) {
-                            trackingUsed[
-                                start + i
-                            ] = true;
-                        }
-
-                        trackingAllocations.push_back({
-                            ptr,
-                            start,
-                            preset.size,
-                            0
-                        });
-
-                        scene.onAllocate(
-                            start,
-                            preset.size,
-                            0,
-                            preset.color
-                        );
-
-                        scene.pushLog(
-                            TextFormat(
-                                "TRACK %s  %zuB",
-                                preset.name,
-                                preset.size
-                            )
-                        );
-                    }
-                    else {
-                        tracking.deallocate(
-                            ptr,
-                            preset.size
-                        );
-
-                        scene.pushLog(
-                            "Visual arena full"
-                        );
+                    if (free) {
+                        start = i;
+                        break;
                     }
                 }
+
+                if (start == ARENA_SIZE) {
+                    tracking.deallocate(ptr, preset.size);
+                    scene.pushLog(
+                        "TRACK: visual map is full; real allocation rolled back."
+                    );
+                    break;
+                }
+
+                for (size_t i = 0; i < preset.size; ++i) {
+                    trackingUsed[start + i] = true;
+                }
+
+                trackingAllocations.push_back({
+                    ptr,
+                    start,
+                    preset.size,
+                    0
+                });
+
+                scene.onAllocate(
+                    start,
+                    preset.size,
+                    0,
+                    preset.color,
+                    std::string(preset.name) +
+                    " " +
+                    std::to_string(preset.size) +
+                    "B"
+                );
+
+                scene.pushLog(
+                    "TRACK ALLOC " +
+                    std::string(preset.name) +
+                    " " +
+                    std::to_string(preset.size) +
+                    "B at visual offset " +
+                    std::to_string(start)
+                );
+                break;
+            }
             }
         }
 
-        // ==================================================
-        // UPDATE
-        // ==================================================
+        // Keep the cursor synchronized even after actions.
+        if (currentAllocator == AllocatorType::Linear) {
+            scene.setCursor(linear.used());
+        }
+        else if (currentAllocator == AllocatorType::Stack) {
+            scene.setCursor(stack.used());
+        }
 
         scene.update(dt);
 
-        // ==================================================
-        // DRAW
-        // ==================================================
+        // --------------------------------------------------
+        // Build HUD data
+        // --------------------------------------------------
+
+        MemoryView view{};
+        view.allocator = currentAllocator;
+        view.description = allocatorConcept(currentAllocator);
+        view.visualCapacityBytes = ARENA_SIZE;
+
+        switch (currentAllocator) {
+        case AllocatorType::Linear:
+            view.usedBytes = linear.used();
+            view.capacityBytes = linear.capacity();
+            view.allocationCount = linearAllocations.size();
+            view.cursorBytes = linear.used();
+            view.status =
+                "Individual free is impossible: reset rewinds the whole arena.";
+            break;
+
+        case AllocatorType::Stack:
+            view.usedBytes = stack.used();
+            view.capacityBytes = stack.capacity();
+            view.allocationCount = stackAllocations.size();
+            view.cursorBytes = stack.used();
+            view.markerBytes = stackMarker;
+            view.markerValid = stackMarkerValid;
+            view.status =
+                stackMarkerValid
+                    ? "Yellow marker = saved rewind point."
+                    : "Set a marker before FREE TO MARKER.";
+            break;
+
+        case AllocatorType::Pool:
+            view.usedBytes =
+                poolAllocations.size() * POOL_CHUNK_SIZE;
+            view.capacityBytes =
+                pool.chunk_count() * pool.chunk_size();
+            view.allocationCount = poolAllocations.size();
+            view.poolSlotsUsed = poolAllocations.size();
+            view.poolSlotsTotal = pool.chunk_count();
+            view.status =
+                "Each allocation consumes exactly one fixed-size slot.";
+            break;
+
+        case AllocatorType::Tracking:
+            view.usedBytes = tracking.getLiveBytes();
+            view.capacityBytes = 0;
+            view.allocationCount = trackingAllocations.size();
+            view.totalAllocated =
+                AllocatorStats::instance().getTotalAllocated();
+            view.totalDeallocated =
+                AllocatorStats::instance().getTotalDeallocated();
+            view.visualCapacityBytes = ARENA_SIZE;
+            for (const auto& allocation : trackingAllocations) {
+                view.visualUsedBytes += allocation.size;
+            }
+            view.status =
+                "The 256B map is visual only; the allocator uses the real heap.";
+            break;
+        }
 
         BeginDrawing();
 
@@ -580,74 +761,14 @@ int main()
         });
 
         BeginMode3D(camera);
-
-        scene.draw3D();
-
+        scene.draw3D(camera);
         EndMode3D();
 
-        int usedBytes = 0;
-        int capacityBytes = 0;
-
-        switch (currentAllocator) {
-
-        case AllocatorType::Linear:
-            usedBytes =
-                static_cast<int>(
-                    linear.used()
-                );
-
-            capacityBytes =
-                static_cast<int>(
-                    linear.capacity()
-                );
-            break;
-
-        case AllocatorType::Stack:
-            usedBytes =
-                static_cast<int>(
-                    stack.used()
-                );
-
-            capacityBytes =
-                static_cast<int>(
-                    stack.capacity()
-                );
-            break;
-
-        case AllocatorType::Pool:
-            usedBytes =
-                static_cast<int>(
-                    poolAllocations.size() *
-                    POOL_CHUNK_SIZE
-                );
-
-            capacityBytes =
-                static_cast<int>(
-                    POOL_CHUNK_COUNT *
-                    POOL_CHUNK_SIZE
-                );
-            break;
-
-        case AllocatorType::Tracking:
-            usedBytes =
-                static_cast<int>(
-                    tracking.getLiveBytes()
-                );
-
-            capacityBytes = 0;
-            break;
-        }
-
-        scene.drawHUD(
-            currentAllocator,
-            usedBytes,
-            capacityBytes
-        );
+        scene.drawHUD(view);
 
         EndDrawing();
     }
 
     CloseWindow();
-
     return 0;
 }

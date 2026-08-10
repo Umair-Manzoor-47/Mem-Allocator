@@ -8,9 +8,10 @@
 #include <vector>
 
 struct MemoryBlock {
-    size_t start;
-    size_t size;
-    Color color;
+    size_t start{};
+    size_t size{};
+    Color color{};
+    std::string label;
 
     float scale = 0.0f;
     float targetScale = 1.0f;
@@ -27,22 +28,44 @@ enum class AllocatorType {
 enum class SceneAction {
     None,
 
-    // Allocation buttons
     Char,
     Int,
     Double,
     Circle,
     Square,
 
-    // Allocator actions
     Reset,
+    Deallocate,
     Pop,
-    Free
+    SetMarker,
+    FreeMarker
 };
 
 struct SceneInput {
     AllocatorType allocator;
     SceneAction action;
+};
+
+struct MemoryView {
+    AllocatorType allocator{};
+    const char* description = "";
+
+    size_t usedBytes = 0;
+    size_t capacityBytes = 0;
+    size_t allocationCount = 0;
+
+    size_t cursorBytes = 0;
+    size_t markerBytes = 0;
+    bool markerValid = false;
+
+    size_t poolSlotsUsed = 0;
+    size_t poolSlotsTotal = 0;
+    size_t visualUsedBytes = 0;
+    size_t visualCapacityBytes = 0;
+
+    size_t totalAllocated = 0;
+    size_t totalDeallocated = 0;
+    const char* status = "";
 };
 
 class MemoryScene {
@@ -57,29 +80,24 @@ public:
         size_t start,
         size_t size,
         size_t padding,
-        Color color
+        Color color,
+        const std::string& label
     );
 
     void onFreeRange(size_t start, size_t size);
-
     void onReset();
+
+    void setCursor(size_t offset);
+    void setMarker(size_t offset);
+    void clearMarker();
 
     void pushLog(const std::string& line);
 
     void update(float dt);
+    void draw3D(const Camera3D& camera) const;
 
-    // Called inside BeginMode3D / EndMode3D.
-    void draw3D() const;
-
-    // Handles mouse input for the UI.
     SceneInput handleInput(AllocatorType currentAllocator);
-
-    // Called outside BeginMode3D / EndMode3D.
-    void drawHUD(
-        AllocatorType allocator,
-        int usedBytes,
-        int capacityBytes
-    ) const;
+    void drawHUD(const MemoryView& view) const;
 
 private:
     size_t m_arenaSize;
@@ -89,23 +107,32 @@ private:
     std::vector<MemoryBlock> m_blocks;
     std::deque<std::string> m_log;
 
+    size_t m_cursor = 0;
+    size_t m_marker = 0;
+    bool m_markerValid = false;
+
     Vector3 cellPos(size_t byteIndex) const;
+    Rectangle allocatorButton(int index) const;
+    Rectangle presetButton(int index) const;
+    Rectangle actionButton(int index, int count) const;
 
-    float arenaWidth() const;
-
-    Rectangle allocatorButton(
-        AllocatorType type,
-        int index
-    ) const;
-
-    Rectangle actionButton(int index) const;
-
+    int actionCount(AllocatorType allocator) const;
     bool buttonPressed(Rectangle bounds) const;
 
     void drawButton(
         Rectangle bounds,
         const char* text,
         Color color,
-        bool selected = false
+        bool selected = false,
+        bool enabled = true
     ) const;
+
+    void drawMetric(
+        int x,
+        int y,
+        const char* label,
+        const char* value
+    ) const;
+
+    static const char* allocatorName(AllocatorType allocator);
 };
